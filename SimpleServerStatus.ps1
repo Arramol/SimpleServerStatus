@@ -1,7 +1,7 @@
 
 <#PSScriptInfo
 
-.VERSION 0.1.0
+.VERSION 0.2.0
 
 .GUID a5cd742b-853b-4f2e-a462-685d13b1048a
 
@@ -66,13 +66,13 @@ Function Send-EmailReport{
         $ReportData
     )
 
-    Send-MailMessage -From $Credentials.UserName -To $Settings.EmailTo -Subject 'Server Health Report' -Body $ReportData -SmtpServer $Settings.SmtpServer -Port $Settings.SmtpPort -UseSsl:$Settings.UseSsl -Credential $Credentials
+    Send-MailMessage -From $Credentials.UserName -To $Settings.EmailTo -Subject 'Server Health Report' -Body $ReportData -BodyAsHtml -SmtpServer $Settings.SmtpServer -Port $Settings.SmtpPort -UseSsl:$Settings.UseSsl -Credential $Credentials
 }
 
 Function Measure-StorageUsage{
     $StorageProblems = New-Object -TypeName System.Collections.Generic.List[String]
     $DetailedReport = "Storage Status:`n"
-    [Array]$Volumes = Get-Volume | Where-Object {$_.DriveType -eq 'Fixed'} | ForEach-Object {
+    [Array]$Volumes = Get-Volume | Where-Object {($_.DriveType -eq 'Fixed') -and (($_.DriveLetter -or $_.FriendlyName))} | ForEach-Object {
         $UsedSpaceBytes = $_.Size - $_.SizeRemaining
         $PercentUsage = [Math]::Round(($UsedSpaceBytes / $_.Size * 100), 2)
         $Problems = 'None'
@@ -108,7 +108,7 @@ Function Measure-StorageUsage{
             Problems = $Problems
         }
     }
-
+    
     If(($Volumes | Where-Object {$_.HealthStatus -ne 'Healthy'}).Count -gt 0){
         $StorageProblems.Add('One or more volumes has a problem health status.')
     }
@@ -125,13 +125,56 @@ Function Measure-StorageUsage{
 
     $StorageReport = [PSCustomObject] @{
         Volumes = $Volumes
-        Problems = $StorageProblems
-        Healthy = $Healthy
+        #Problems = $StorageProblems
+        #Healthy = $Healthy
         DetailedReport = $DetailedReport
+        HtmlReport = (Format-HtmlStorageDetails -Volumes $Volumes)
         SummaryObject = $SummaryObject
     }
 
     Return $StorageReport
+}
+
+Function Format-HtmlStorageDetails{
+    Param(
+        [Array]$Volumes = @()
+    )
+
+    $HtmlStorage = New-TableHeader -SectionName 'Storage Details' -ColumnNames @('Drive Letter', 'Drive Name', 'File System', 'Health Status', 'Percent Used', 'Free Space', 'Capacity')
+
+    ForEach($Volume in $Volumes){
+        If($Volume.'Health Status' -eq 'Healthy'){
+            $HealthColor = $BgColorHealthy
+        }
+        Else{
+            $HealthColor = $BgColorError
+        }
+        
+        If($Volume.'Percent Used' -lt 80){
+            $UsageColor = $BgColorHealthy
+        }
+        ElseIf($Volume.'Percent Used' -lt 90){
+            $UsageColor = $BgColorWarning
+        }
+        Else{
+            $UsageColor = $BgColorError
+        }
+
+        $HtmlStorage += @"
+  <tr>
+    <td>$($Volume.'Drive Letter')</td>
+    <td>$($Volume.Name)</td>
+    <td>$($Volume.'File System')</td>
+    <td bgcolor="$HealthColor;">$($Volume.'Health Status')</td>
+    <td bgcolor="$UsageColor;">$($Volume.'Percent Used')</td>
+    <td>$($Volume.'Free Space')</td>
+    <td>$($Volume.Capacity)</td>
+  </tr>
+"@
+    }
+
+    $HtmlStorage += "</table>"
+    Return $HtmlStorage
 }
 
 Function Get-MissingServices{
@@ -162,19 +205,48 @@ Function Get-MissingServices{
         $DetailedReport += $MissingServices | Sort-Object DisplayName | Format-Table DisplayName, Name, Status | Out-String
     }
 
+    $HtmlReport = Format-HtmlServiceDetails -Services $MissingServices
+
     $SummaryObject = [PSCustomObject] @{
         Category = 'Services'
         Healthy = $Healthy
     }
 
     $ServicesStatus = [PSCustomObject] @{
-        'Missing Services' = $MissingServices
-        Healthy = $Healthy
         DetailedReport = $DetailedReport
         SummaryObject = $SummaryObject
+        HtmlReport = $HtmlReport
     }
 
     Return $ServicesStatus
+}
+
+Function Format-HtmlServiceDetails{
+    Param(
+        [Array]$Services = @()
+    )
+
+    $HtmlServices = New-TableHeader -SectionName 'Services Details' -ColumnNames @('Display Name', 'Name', 'Status')
+    If($Services.Count -eq 0){
+        $HtmlServices += @"
+    <tr>
+        <td colspan="3" bgcolor="$BgColorHealthy;">No missing services</td>
+    </tr>
+"@
+    }
+    Else{
+        ForEach($Service in $Services){
+            $HtmlServices += @"
+    <tr>
+      <td>$($Service.DisplayName)</td>
+      <td>$($Service.Name)</td>
+      <td bgcolor="$BgColorError;">$($Service.Status)</td>
+"@
+        }
+    }
+
+    $HtmlServices += "</table>"
+    Return $HtmlServices
 }
 
 Function Get-BackupResult{
@@ -185,19 +257,23 @@ Function Get-BackupResult{
     $DetailedReport = "Backup Status:`n"
     $BackupSummary = Get-WBSummary -ErrorAction Stop
     $BackupHealthy = $true
+    $LastSuccessColor = $BgColorHealthy
     $BackupProblems = New-Object -TypeName System.Collections.Generic.List[String]
     If($BackupSummary.LastSuccessfulBackupTime){
         If($BackupSummary.LastSuccessfulBackupTime -ne $BackupSummary.LastBackupTime){
             $BackupHealthy = $false
+            $LastSuccessColor = $BgColorWarning
             $BackupProblems.Add("Most recent backup job failed at $($BackupSummary.LastBackupTime).")
         }
         If($BackupSummary.LastSuccessfulBackupTime -lt (Get-Date).AddDays(-1)){
             $BackupHealthy = $false
+            $LastSuccessColor = $BgColorError
             $BackupProblems.Add("No successful backups in the last 24 hours. Last successful backup was at $($BackupSummary.LastSuccessfulBackupTime).")
         }
     }
     Else{
         $BackupHealthy = $false
+        $LastSuccessColor = $BgColorError
         $BackupProblems.Add("No record of any successful backups!")
     }
 
@@ -216,15 +292,88 @@ Function Get-BackupResult{
         Healthy = $Healthy
     }
 
+    $HtmlReport = Format-HtmlBackupDetails -Problems $BackupProblems -BackupSummary $BackupSummary -LastSuccessColor $LastSuccessColor
+
     $BackupResult = [PSCustomObject] @{
-        Healthy = $BackupHealthy
-        'Last Successful Backup' = $BackupSummary.LastSuccessfulBackupTime
-        Problems = $BackupProblems
         DetailedReport = $DetailedReport
         SummaryObject = $SummaryObject
+        HtmlReport = $HtmlReport
     }
 
     Return $BackupResult
+}
+
+Function Format-HtmlBackupDetails{
+    Param(
+        [Array]$Problems = @(),
+
+        $BackupSummary,
+
+        $LastSuccessColor
+    )
+
+    $HtmlBackup = @"
+    <table style="width: 33%" style="border-collapse: collapse; border: 1 px solid #000000;">
+      <tr>
+        <td colspan="2" bgcolor="$BgColorSectionHeader" style="color: #FFFFFF; font-size: large; height: 35px;">
+          'Backup Details'
+        </td>
+      </tr>
+      <tr>
+"@
+
+    If($Problems.Count -gt 0){
+        $HtmlBackup += @"
+        <td colspan="2" style=`"text-align: center;`"><b>Problems</b></td>
+      </tr>
+"@
+        ForEach($Problem in $Problems){
+            $HtmlBackup += @"
+      <tr>
+        <td colspan="2;">$Problem</td>
+      </tr>
+"@
+        }
+    $HtmlBackup += "  <tr>"
+    }
+
+    $HtmlBackup += @"
+        <td colspan=`"2`" style=`"text-align: center;`"><b>Backup Job(s)</b></td>"
+      </tr>
+      <tr>
+        <td style = "text-align: center;"><b>Job Timestamp</b></td>
+        <td style = "text-align: center;"><b>Result</b></td>
+      </tr>
+"@
+    If($BackupSummary.LastBackupTime){
+        If($BackupSummary.LastSuccessfulBackupTime -ne $BackupSummary.LastBackupTime){
+            $HtmlBackup += @"
+      <tr>
+        <td>$($BackupSummary.LastBackupTime)</td>
+        <td bgcolor="$BgColorError;">Failed</td>
+      </tr>
+"@
+            
+        }
+    }
+    Else{
+        $HtmlBackup += @"
+      <tr>
+        <td colspan="2" bgcolor="$BgColorError;">No backup jobs found</td>
+      </tr>
+"@
+    }
+    If($BackupSummary.LastSuccessfulBackupTime){
+        $HtmlBackup += @"
+      <tr>
+        <td>$($BackupSummary.LastSuccessfulBackupTime)</td>
+        <td bgcolor="$LastSuccessColor;">Succeeded</td>
+      </tr>
+"@
+    }
+
+    $HtmlBackup += "</table>"
+    Return $HtmlBackup
 }
 
 Function Get-UpdateStatus{
@@ -245,64 +394,168 @@ Function Get-UpdateStatus{
         Healthy = $Healthy
     }
 
+    $HtmlReport = Format-HtmlUpdateDetails -RecentUpdates $RecentUpdates
+
     $UpdateStatus = [PSCustomObject] @{
-        Healthy = $Healthy
-        'Updates installed in the last 45 days' = $RecentUpdates
         DetailedReport = $DetailedReport
         SummaryObject = $SummaryObject
+        HtmlReport = $HtmlReport
     }
 
     Return $UpdateStatus
 }
 
+Function Format-HtmlUpdateDetails{
+    Param(
+        [Array]$RecentUpdates = @()
+    )
+
+    $HtmlUpdates = New-TableHeader -SectionName 'Update Details (Last 45 Days)' -ColumnNames @('Hotfix ID', 'Description', 'Installed On')
+    If($RecentUpdates.Count -eq 0){
+        $HtmlUpdates += @"
+      <tr>
+        <td colspan="3" bgcolor="$BgColorError;">No updates installed in the last 45 days</td>
+      </tr>
+"@
+    }
+    Else{
+        ForEach($Update in $RecentUpdates){
+            $HtmlUpdates += @"
+      <tr>
+        <td>$($Update.HotfixId)</td>
+        <td>$($Update.Description)</td>
+        <td>$($Update.InstalledOn)</td>
+      </tr>
+"@
+        }
+    }
+
+    $HtmlUpdates += "</table>"
+    Return $HtmlUpdates
+}
+
+Function New-TableHeader{
+    Param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [String]$SectionName,
+
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [String[]]$ColumnNames
+    )
+
+    $TableHeader = @"
+    <table style="width: 33%" style="border-collapse: collapse; border: 1 px solid #000000;">
+      <tr>
+        <td colspan="$($ColumnNames.Count)" bgcolor="$BgColorSectionHeader" style="color: #FFFFFF; font-size: large; height: 35px;">
+          $SectionName
+        </td>
+      </tr>
+      <tr>
+"@
+
+    ForEach($ColumnName in $ColumnNames){
+        $TableHeader += "    <td style=`"text-align: center;`"><b>$ColumnName</b></td>"
+    }
+    
+    $TableHeader += "  </tr>"
+    Return $TableHeader
+}
+Function Format-HtmlSummary{
+    Param(
+        [System.Collections.Generic.List[Object]]$SummaryObjects
+    )
+
+    $HtmlSummary = New-TableHeader -SectionName 'Summary' -ColumnNames @('Category', 'Healthy')
+
+    ForEach($SummaryObject in $SummaryObjects){
+        If($SummaryObject.Healthy){
+            $HealthText = 'Yes'
+            $HealthColor = "$BgColorHealthy"
+        }
+        Else{
+            $HealthText = 'No'
+            $HealthColor = "$BgColorError"
+        }
+        $HtmlSummary += @"
+  <tr style="border-bottom-style: solid; border-bottom-width: 1px; padding-bottom: 1px">
+    <td>$($SummaryObject.Category)</td>
+    <td bgcolor="$HealthColor;">$HealthText</td>
+  </tr>
+"@
+    }
+
+    $HtmlSummary += "</table>"
+    Return $HtmlSummary
+}
+
+Clear-Host
+Write-Host "$(Get-Date) - Beginning script run."
+$Summary = New-Object -TypeName System.Collections.Generic.List[Object]
+$HtmlDetails = New-Object -TypeName System.Collections.Generic.List[Object]
+
+#Set global color options for HTML report
+New-Variable -Name BgColorHealthy -Scope Script -Value "#99FF99" -Option ReadOnly
+New-Variable -Name BgColorWarning -Scope Script -Value "#FFFF99" -Option ReadOnly
+New-Variable -Name BgColorError -Scope Script -Value "#FF6666" -Option ReadOnly
+New-Variable -Name BgColorSectionHeader -Scope Script -Value "#0000AA" -Option ReadOnly
+
+#Import settings and email credentials
 $Settings = Get-ScriptSettings
 $Credentials = Import-CliXml -Path $Settings.EmailCredentialsFilePath -ErrorAction Continue
-$Summary = New-Object -TypeName System.Collections.Generic.List[Object]
 If($Credentials.UserName -notlike "*@*"){
     Throw "$($Settings.EmailCredentialsFilePath) does not appear to contain valid credentials, or the credentials were encrypted by a different user account."
 }
 
-Clear-Host
+#Collect report data
 Write-Host "Getting storage status." -ForegroundColor Cyan
 $StorageUsage = Measure-StorageUsage
 $Summary.Add($StorageUsage.SummaryObject)
-$DetailedReport = $StorageUsage.DetailedReport + "============================================================`n`n"
+$HtmlDetails.Add($StorageUsage.HtmlReport)
 
 Write-Host "Checking for missing services." -ForegroundColor Cyan
 $ServicesStatus = Get-MissingServices -Settings $Settings
 $Summary.Add($ServicesStatus.SummaryObject)
-$DetailedReport += $ServicesStatus.DetailedReport + "============================================================`n`n"
+$HtmlDetails.Add($ServicesStatus.HtmlReport)
+
 If($Settings.IncludeBackups){
     Write-Host "Checking backup status." -ForegroundColor Cyan
     Try{
         $BackupResult = Get-BackupResult
         $Summary.Add($BackupResult.SummaryObject)
-        $DetailedReport += $BackupResult.DetailedReport + "============================================================`n`n"
+        $HtmlDetails.Add($BackupResult.HtmlReport)
     }
     Catch{
         $BackupResult = 'Failed to retrieve backup summary. Check that the WindowsServerBackup PowerShell module is installed and that a backup schedule is configured.'
-        $DetailedReport += $BackupResult + "============================================================`n`n"
     }
 }
 Else{
     Write-Host "Skipping backup status check." -ForegroundColor Cyan
     $BackupResult = 'Not included'
 }
+
 Write-Host "Checking update status." -ForegroundColor Cyan
 $UpdateStatus = Get-UpdateStatus
 $Summary.Add($UpdateStatus.SummaryObject)
-$DetailedReport += $UpdateStatus.DetailedReport
+$HtmlDetails.Add($UpdateStatus.HtmlReport)
 
-$EmailBody = "Summary:`n"
-$EmailBody += $Summary | Format-Table Category, Healthy | Out-String
-$EmailBody += "============================================================`n"
-$EmailBody += '============================================================'
-$EmailBody += "`n`nDetailed Reports:`n"
-$EmailBody += $DetailedReport
+#Generate the email report
+Write-Host "Generating email report." -ForegroundColor Cyan
+$HtmlSummary = Format-HtmlSummary -SummaryObjects $Summary
+$EmailBody = $HtmlSummary
+ForEach($Item in $HtmlDetails){
+    $EmailBody += "<br>"
+    $EmailBody += "<br>"
+    $EmailBody += $Item
+}
 
 If($Credentials){
+    Write-Host "Sending email report." -ForegroundColor Cyan
     Send-EmailReport -Settings $Settings -Credentials $Credentials -ReportData $EmailBody
 }
 Else{
     $EmailBody
 }
+
+Write-Host "$(Get-Date) - Script execution complete." -ForegroundColor Green
