@@ -1,7 +1,7 @@
 
 <#PSScriptInfo
 
-.VERSION 0.3.0
+.VERSION 0.3.1
 
 .GUID a5cd742b-853b-4f2e-a462-685d13b1048a
 
@@ -259,22 +259,15 @@ Function Get-BackupResult{
     $BackupHealthy = $true
     $LastSuccessColor = $BgColorHealthy
     $BackupProblems = New-Object -TypeName System.Collections.Generic.List[String]
-    If($BackupSummary.LastSuccessfulBackupTime){
-        If($BackupSummary.LastSuccessfulBackupTime -ne $BackupSummary.LastBackupTime){
-            $BackupHealthy = $false
-            $LastSuccessColor = $BgColorWarning
-            $BackupProblems.Add("Most recent backup job failed at $($BackupSummary.LastBackupTime).")
-        }
-        If($BackupSummary.LastSuccessfulBackupTime -lt (Get-Date).AddDays(-1)){
-            $BackupHealthy = $false
-            $LastSuccessColor = $BgColorError
-            $BackupProblems.Add("No successful backups in the last 24 hours. Last successful backup was at $($BackupSummary.LastSuccessfulBackupTime).")
-        }
-    }
-    Else{
+    If(-not $BackupSummary.LastSuccessfulBackupTime){
         $BackupHealthy = $false
         $LastSuccessColor = $BgColorError
         $BackupProblems.Add("No record of any successful backups!")
+    }
+    ElseIf($BackupSummary.LastSuccessfulBackupTime -lt ((Get-Date).AddDays(-1))){
+        $BackupHealthy = $false
+        $LastSuccessColor = $BgColorError
+        $BackupProblems.Add("Last successful backup was more than a day ago.")
     }
 
     If($BackupHealthy){
@@ -289,7 +282,7 @@ Function Get-BackupResult{
 
     $SummaryObject = [PSCustomObject] @{
         Category = 'Backups'
-        Healthy = $Healthy
+        Healthy = $BackupHealthy
     }
 
     $HtmlReport = Format-HtmlBackupDetails -Problems $BackupProblems -BackupSummary $BackupSummary -LastSuccessColor $LastSuccessColor
@@ -316,7 +309,7 @@ Function Format-HtmlBackupDetails{
     <table style="width: 33%" style="border-collapse: collapse; border: 1 px solid #000000;">
       <tr>
         <td colspan="2" bgcolor="$BgColorSectionHeader" style="color: #FFFFFF; font-size: large; height: 35px;">
-          'Backup Details'
+          Backup Details
         </td>
       </tr>
       <tr>
@@ -491,7 +484,7 @@ Function Format-HtmlSummary{
 }
 
 Clear-Host
-Write-Host "$(Get-Date) - Beginning script run."
+Write-Output "$(Get-Date) - Beginning script run."
 $Summary = New-Object -TypeName System.Collections.Generic.List[Object]
 $HtmlDetails = New-Object -TypeName System.Collections.Generic.List[Object]
 
@@ -509,18 +502,18 @@ If($Credentials.UserName -notlike "*@*"){
 }
 
 #Collect report data
-Write-Host "Getting storage status." -ForegroundColor Cyan
+Write-Output "Getting storage status."
 $StorageUsage = Measure-StorageUsage
 $Summary.Add($StorageUsage.SummaryObject)
 $HtmlDetails.Add($StorageUsage.HtmlReport)
 
-Write-Host "Checking for missing services." -ForegroundColor Cyan
+Write-Output "Checking for missing services."
 $ServicesStatus = Get-MissingServices -Settings $Settings
 $Summary.Add($ServicesStatus.SummaryObject)
 $HtmlDetails.Add($ServicesStatus.HtmlReport)
 
 If($Settings.IncludeBackups){
-    Write-Host "Checking backup status." -ForegroundColor Cyan
+    Write-Output "Checking backup status."
     Try{
         $BackupResult = Get-BackupResult
         $Summary.Add($BackupResult.SummaryObject)
@@ -531,17 +524,17 @@ If($Settings.IncludeBackups){
     }
 }
 Else{
-    Write-Host "Skipping backup status check." -ForegroundColor Cyan
+    Write-Output "Skipping backup status check."
     $BackupResult = 'Not included'
 }
 
-Write-Host "Checking update status." -ForegroundColor Cyan
+Write-Output "Checking update status."
 $UpdateStatus = Get-UpdateStatus
 $Summary.Add($UpdateStatus.SummaryObject)
 $HtmlDetails.Add($UpdateStatus.HtmlReport)
 
 #Generate the email report
-Write-Host "Generating email report." -ForegroundColor Cyan
+Write-Output "Generating email report."
 $HtmlSummary = Format-HtmlSummary -SummaryObjects $Summary
 $EmailBody = $HtmlSummary
 ForEach($Item in $HtmlDetails){
@@ -551,11 +544,11 @@ ForEach($Item in $HtmlDetails){
 }
 
 If($Credentials){
-    Write-Host "Sending email report." -ForegroundColor Cyan
+    Write-Output "Sending email report."
     Send-EmailReport -Settings $Settings -Credentials $Credentials -ReportData $EmailBody
 }
 Else{
     $EmailBody
 }
 
-Write-Host "$(Get-Date) - Script execution complete." -ForegroundColor Green
+Write-Output "$(Get-Date) - Script execution complete."

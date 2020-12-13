@@ -120,7 +120,7 @@ Function Get-NewCredsFilePath{
 
     Clear-Host
     Write-Host "Current credentials file path is: $($Settings.EmailCredentialsFilePath)" -ForegroundColor Magenta
-    $Choice = Read-Host -Prompt "Please enter the new credentials file path, or C to cancel."
+    $Choice = Read-Host -Prompt "Please enter the new credentials file path, or C to cancel"
     If($Choice -ne 'C'){
         $Settings.EmailCredentialsFilePath = $Choice
     }
@@ -136,10 +136,10 @@ Function Get-NewRecipients{
     Clear-Host
     $Recipients = Format-CommaList -ListItems $Settings.EmailTo
     Write-Host "Current recipient email addresses are: $Recipients" -ForegroundColor Magenta
-    $Choice = Read-Host -Prompt "Please enter a new comma-separated list of email addresses, or C to cancel."
+    $Choice = Read-Host -Prompt "Please enter a new comma-separated list of email addresses, or C to cancel"
     If($Choice -ne 'C'){
         $Choice.Replace(' ', '')
-        $Settings.EmailTo = $Choice.Split(',')
+        $Settings.EmailTo = ($Choice.Split(','))
     }
 
     Return $Settings
@@ -152,7 +152,7 @@ Function Get-NewSmtpServer{
 
     Clear-Host
     Write-Host "Current SMTP server is: $($Settings.SmtpServer)" -ForegroundColor Magenta
-    $Choice = Read-Host -Prompt "Please enter a new SMTP server address (ex: smtp.gmail.com), or C to cancel."
+    $Choice = Read-Host -Prompt "Please enter a new SMTP server address (ex: smtp.gmail.com), or C to cancel"
     If($Choice -ne 'C'){
         $Settings.SmtpServer = $Choice
     }
